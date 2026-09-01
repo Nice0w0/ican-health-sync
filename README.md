@@ -24,19 +24,50 @@ for its newest Blood Glucose sample and sends that timestamp as `?since=`, so
 only genuinely new readings come back. HealthKit has no upsert — `Log Health
 Sample` only ever appends — so this filtering has to happen before logging.
 
-Run your own instance. Do not point your Shortcut at someone else's.
+Run your own instance. Nobody operates this as a service — there is no
+endpoint to share, and pointing your Shortcut at a stranger's deployment would
+mean handing them your glucose data.
 
-## Deploy
+## Deploy your own
+
+There is no shared instance and no service to sign up for. You deploy a copy,
+it answers only to you, and it keeps nothing.
+
+### Vercel (free, nothing to maintain)
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Nice0w0/ican-health-sync)
+
+Click, connect your GitHub account, done. You get an HTTPS URL like
+`https://your-project.vercel.app`. Every push redeploys automatically.
+
+Then set two environment variables in the Vercel dashboard
+(Settings → Environment Variables):
+
+| Variable | Value |
+|---|---|
+| `CGM_TZ_OFFSET` | your UTC offset in hours, e.g. `7` for Bangkok |
+| `CGM_TOKEN` | any long random string — required, since a Vercel URL is public |
+
+Your endpoint is `https://your-project.vercel.app/api/convert`.
+
+### Self-hosted
+
+No dependencies at all, so plain Python works:
 
 ```bash
 git clone https://github.com/Nice0w0/ican-health-sync.git && cd ican-health-sync
-cp .env.example .env      # optional: set CGM_TOKEN
+python3 server.py        # http://127.0.0.1:8000/api/convert
+```
+
+Or with Docker:
+
+```bash
+cp .env.example .env      # set CGM_TOKEN
 docker compose up -d --build
-curl localhost:8000/healthz          # {"ok":true}
 ```
 
 The container binds to `127.0.0.1` only. Put a TLS proxy in front — glucose
-readings should not cross the internet in plaintext. With Caddy that is:
+readings should not cross the internet in plaintext. With Caddy:
 
 ```
 cgm.example.com {
@@ -48,8 +79,8 @@ cgm.example.com {
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CGM_TOKEN` | *(unset)* | If set, requests must carry `X-Token` or `?token=`. Leave unset only on a private network. |
-| `CGM_TZ_OFFSET` | `7` | **The wearer's** UTC offset in hours. The export contains no timezone, so this is how local reading times are reconstructed. A server in UTC with the default `7` would still be correct for a wearer in Bangkok. |
+| `CGM_TOKEN` | *(unset)* | If set, requests must carry `X-Token` or `?token=`. **Set it on any public deployment.** |
+| `CGM_TZ_OFFSET` | `7` | **The wearer's** UTC offset in hours. The export contains no timezone, so this is how local reading times are reconstructed — a server running in UTC still produces correct times. |
 
 ## API
 

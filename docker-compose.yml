@@ -5,7 +5,5 @@ services:
     ports:
       - "127.0.0.1:8000:8000"   # localhost only; put a TLS proxy in front
     environment:
-      # Optional. Unset = open endpoint; fine behind a VPN, not on the internet.
       CGM_TOKEN: "${CGM_TOKEN:-}"
-      # The wearer's timezone, not the server's. The .xls has no timezone in it.
       CGM_TZ_OFFSET: "${CGM_TZ_OFFSET:-7}"
