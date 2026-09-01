@@ -26,8 +26,8 @@ TOKEN = os.environ.get("CGM_TOKEN", "")
 
 HEADER_COL0 = "เลขที่"
 TIME_FORMAT = "%H:%M,%m/%d/%Y"  # "15:22,09/01/2026" -> 1 Sep 2026, 15:22
-DEFAULT_UNIT = "mg/dL"
 MAX_BYTES = 10 * 1024 * 1024
+
 
 
 class BadRequest(Exception):
@@ -35,6 +35,45 @@ class BadRequest(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+# Shortcuts' "Log Health Sample" takes its unit from a fixed picker -- it
+# cannot be driven by a variable. So the unit is settled here instead: read
+# whatever the export declares, convert to the one the Shortcut is set to, and
+# the two can never disagree. This is not cosmetic -- 7.2 mmol/L logged as
+# 7.2 mg/dL reads as severe hypoglycaemia.
+MG_PER_MMOL = 18.0182
+DEFAULT_UNIT = "mg/dL"
+UNITS = {                      # keys are lowercased with spaces and dots removed
+    "mg/dl": "mg/dL",
+    "mgdl": "mg/dL",
+    "มก/ดล": "mg/dL",           # Thai-localised exports
+    "มก/ดล.": "mg/dL",
+    "mmol/l": "mmol/L",
+    "mmoll": "mmol/L",
+    "มิลลิโมล/ลิตร": "mmol/L",
+    "มิลลิโมล/ล": "mmol/L",
+}
+
+
+def canonical_unit(raw: str) -> str:
+    unit = UNITS.get(raw.strip().lower().replace(" ", "").replace(".", ""))
+    if unit is None:
+        # Never guess a glucose unit; refusing is the safe failure.
+        raise BadRequest(422, "unrecognised glucose unit %r -- expected mg/dL "
+                              "or mmol/L" % raw)
+    return unit
+
+
+def convert_value(value: float, src: str, dst: str) -> float:
+    if src == dst:
+        converted = value
+    elif src == "mmol/L" and dst == "mg/dL":
+        converted = value * MG_PER_MMOL
+    else:
+        converted = value / MG_PER_MMOL
+    # mg/dL is whole numbers in practice; mmol/L is conventionally 1 decimal.
+    return round(converted) if dst == "mg/dL" else round(converted, 1)
 
 
 def extract_upload(body: bytes, content_type: str) -> bytes:
@@ -82,10 +121,11 @@ def parse_export(blob: bytes) -> tuple[list[dict], str]:
     if header_row is None:
         raise BadRequest(422, "no '%s' header row -- not a CGM export" % HEADER_COL0)
 
-    unit = DEFAULT_UNIT
+    # The value column header declares the unit, e.g. "ค่ากลูโคส (mg/dL)".
     head = str(grid[header_row][2]) if len(grid[header_row]) > 2 else ""
-    if "(" in head and ")" in head:
-        unit = head[head.index("(") + 1:head.rindex(")")].strip()
+    if "(" not in head or ")" not in head:
+        raise BadRequest(422, "value column header %r does not declare a unit" % head)
+    unit = canonical_unit(head[head.index("(") + 1:head.rindex(")")])
 
     readings = []
     for i in range(header_row + 1, len(grid)):
@@ -110,7 +150,7 @@ def parse_export(blob: bytes) -> tuple[list[dict], str]:
             # This exact shape is what Shortcuts' date detector parses, and it
             # works on a non-English device -- do not localise it.
             "date_text": when.strftime("%b %d, %Y at %I:%M %p"),
-            "value": int(value) if value.is_integer() else value,
+            "value": value,          # in the file's own unit; converted below
             "unit": unit,
         })
     if not readings:
@@ -142,8 +182,8 @@ def authorise(supplied: str) -> None:
         raise BadRequest(401, "bad token")
 
 
-def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], int, str]:
-    """Return (readings, total_before_filtering, unit)."""
+def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], int, str, str]:
+    """Return (readings, total_before_filtering, output_unit, source_unit)."""
     authorise(query.get("token", ""))
 
     blob = extract_upload(body, content_type)
@@ -152,8 +192,16 @@ def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], in
     if len(blob) > MAX_BYTES:
         raise BadRequest(413, "file too large")
 
-    readings, unit = parse_export(blob)
+    readings, source_unit = parse_export(blob)
     total = len(readings)
+
+    # Default to mg/dL because that is what the published Shortcut's Log Health
+    # Sample action is set to. Anyone whose Shortcut uses mmol/L passes
+    # ?unit=mmol/L; the two must agree or Health records a wrong number.
+    out_unit = canonical_unit(query.get("unit") or DEFAULT_UNIT)
+    for r in readings:
+        r["value"] = convert_value(r["value"], source_unit, out_unit)
+        r["unit"] = out_unit
 
     since = query.get("since")
     if since:
@@ -168,4 +216,4 @@ def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], in
         except ValueError:
             raise BadRequest(400, "limit must be a number")
 
-    return readings, total, unit
+    return readings, total, out_unit, source_unit

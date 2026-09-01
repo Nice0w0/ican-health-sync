@@ -41,7 +41,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
-            readings, total, unit = convert(
+            readings, total, unit, source_unit = convert(
                 body, self.headers.get("Content-Type", ""), query)
         except BadRequest as exc:
             return self._send(exc.status, {"error": exc.message})
@@ -52,4 +52,5 @@ class handler(BaseHTTPRequestHandler):
             "X-Readings-Total": str(total),
             "X-Readings-Returned": str(len(readings)),
             "X-Unit": unit,
+            "X-Source-Unit": source_unit,
         })

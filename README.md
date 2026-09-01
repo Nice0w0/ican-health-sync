@@ -112,6 +112,7 @@ request body.
 | Query | Meaning |
 |---|---|
 | `since` | ISO 8601 or a unix timestamp. Returns only readings **strictly newer**. A value without a timezone is read in `CGM_TZ_OFFSET`. |
+| `unit` | `mg/dL` (default) or `mmol/L`. Values are converted from whatever the export declares. |
 | `limit` | At most this many readings, newest first. Useful for a first run. |
 | `token` | Alternative to the `X-Token` header, for clients that cannot set headers easily. |
 
@@ -128,8 +129,23 @@ Returns a JSON array, oldest first:
 reliably — including on a non-English device. Feed *that* to **Get Dates from
 Input**, not `date_iso`.
 
-Response headers `X-Readings-Total`, `X-Readings-Returned` and `X-Unit` let a
-client report what happened without walking the array.
+Response headers `X-Readings-Total`, `X-Readings-Returned`, `X-Unit` and
+`X-Source-Unit` let a client report what happened without walking the array.
+
+### Units
+
+The export declares its unit in the value column header, and the service
+converts to whatever `?unit=` asks for — so the number returned always matches
+the unit the Shortcut is configured to log.
+
+This matters because Shortcuts' **Log Health Sample** takes its unit from a
+fixed picker that cannot be driven by a variable. If the two disagree, Health
+records a badly wrong number with no error: `7.2 mmol/L` written as
+`7.2 mg/dL` reads as severe hypoglycaemia. Pinning both from one place is the
+only way they cannot drift.
+
+An unrecognised unit is rejected with `422` rather than assumed. Both English
+and Thai spellings of mg/dL and mmol/L are understood.
 
 Errors: `400` unreadable request, `401` bad token, `413` oversized,
 `422` not a CGM export.
