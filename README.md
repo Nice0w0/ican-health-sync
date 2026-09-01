@@ -6,6 +6,26 @@ write straight into Apple Health.
 Share the export from the CGM app, tap the Shortcut, done. Readings land in
 Health with their real measurement times.
 
+## "I read that this is impossible"
+
+Search results and forum answers commonly say the iCan / Sinocare CGM app has
+no HealthKit support and no export, and that the only route is an Android phone
+running xDrip+ or Juggluco feeding Nightscout, plus a native iOS app to write
+HealthKit.
+
+That is out of date, at least for the Thai-language iCan app on i3/i6:
+
+- **The app does export.** Its share button hands over an `.xls` file.
+- **You do not need Android, xDrip+, Nightscout, or Xcode.**
+- **You do not need to write a native app.** Apple's own Shortcuts app is
+  native and can write HealthKit — `Log Health Sample` is a built-in action.
+
+The only genuinely missing piece is that Shortcuts cannot read `.xls`. That is
+the single gap this project fills. Everything else is stock iOS.
+
+Built and verified end to end on an iPhone: readings land in Apple Health with
+their real measurement times, not the import time.
+
 ## Why this exists
 
 Apple Health can only be written from iOS, and the Shortcuts app cannot read
