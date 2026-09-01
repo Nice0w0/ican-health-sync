@@ -156,25 +156,54 @@ Errors: `400` unreadable request, `401` bad token, `413` oversized,
 
 ## The Shortcut
 
-Nine actions, all built in to iOS:
+`shortcut/iCan to Health (template).shortcut` is ready to import. It contains a
+**placeholder URL and no token** — you point it at your own deployment.
 
-1. **Find Health Samples** — Blood Glucose, newest first, limit 1
-2. **Get Contents of URL** — `POST https://your.host/convert?since=<step 1's date>`,
-   request body **File** = Shortcut Input
-3. **Get Dictionary from Input**
-4. **Repeat with Each**
-5. **Get Dictionary Value** — `value`, from Repeat Item
-6. **Get Dictionary Value** — `date_text`, from Repeat Item
-7. **Get Dates from Input** — step 6
-8. **Log Health Sample** — Blood Glucose, mg/dL, value ← 5, date ← 7
-9. **End Repeat**
+1. Open the file on the iPhone and add the shortcut.
+2. Open its **Get Contents of URL** action and replace the URL with your own:
+   `https://your-project.vercel.app/api/convert?token=YOUR_TOKEN&unit=mg/dL&since=`
+   Leave the date variable that already sits at the end of the field.
+3. Turn on *Show in Share Sheet*, accepting files.
 
-Turn on *Show in Share Sheet* and accept files, so the CGM app's share button
-offers it.
+On macOS you can generate a filled-in copy instead:
 
-On the first run, add `&limit=1` to the URL and check in Health that the sample
-reads the right value **and** carries the CGM's measurement time rather than
-the import time. Then remove it.
+```bash
+python3 build_shortcut.py \
+  --url https://your-project.vercel.app/api/convert \
+  --token YOUR_TOKEN --unit mg/dL -o mine.shortcut
+shortcuts sign -m anyone -i mine.shortcut -o "iCan to Health.shortcut"
+```
+
+Pass `--unit mmol/L` if that is what your Health app should record; the flag
+pins the URL parameter and the Log Health Sample picker together so they cannot
+disagree.
+
+> **Never publish a filled-in shortcut.** The token is embedded in its URL, and
+> anyone holding it can spend your deployment's quota. There is no stored data
+> to steal and no way to write to your Health, but rotate the token in Vercel
+> if one leaks.
+
+### What it does, in order
+
+1. **Find Health Samples** — Blood Glucose, newest first, limit 1 → the import cursor
+2. **Get Dates from Input** → that sample's timestamp
+3. **Get Contents of URL** — POST the shared `.xls`, with the cursor as `?since=`
+4. **Get Dictionary from Input**
+5. **Repeat with Each**
+6. **Get Dictionary Value** — `value`
+7. **Get Dictionary Value** — `date_text`
+8. **Get Dates from Input**
+9. **Log Health Sample** — Blood Glucose, value ← 6, date ← 8
+10. **End Repeat**
+
+Before the first real run, check that action 1 shows **Sort by Start Date,
+Latest First, Limit 1**. Without that the cursor is wrong and readings import
+repeatedly — and Health has no way to overwrite a sample, so duplicates have to
+be deleted by hand.
+
+Then add `&limit=1` to the URL for one run and confirm in Health that the
+sample carries the right value **and** the CGM's measurement time rather than
+the import time. Remove it once both check out.
 
 ## The `.xls` reader
 
