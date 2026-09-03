@@ -12,6 +12,7 @@ Nothing here writes to disk or keeps state between calls.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -192,6 +193,84 @@ def thin(rows: list[tuple[datetime, float]], minutes: int) -> list[tuple[datetim
     return kept
 
 
+# Shortcuts renders a Date into a text field using the phone's own locale, so
+# what arrives here depends on where the wearer lives. A Thai phone sends
+# "3 ก.ย. 2569 23:22" -- Buddhist era, Thai month name -- and nothing about that
+# is ISO 8601. Rejecting it would be correct and useless.
+THAI_MONTHS = {
+    "ม.ค.": 1, "มกราคม": 1, "ก.พ.": 2, "กุมภาพันธ์": 2,
+    "มี.ค.": 3, "มีนาคม": 3, "เม.ย.": 4, "เมษายน": 4,
+    "พ.ค.": 5, "พฤษภาคม": 5, "มิ.ย.": 6, "มิถุนายน": 6,
+    "ก.ค.": 7, "กรกฎาคม": 7, "ส.ค.": 8, "สิงหาคม": 8,
+    "ก.ย.": 9, "กันยายน": 9, "ต.ค.": 10, "ตุลาคม": 10,
+    "พ.ย.": 11, "พฤศจิกายน": 11, "ธ.ค.": 12, "ธันวาคม": 12,
+}
+EN_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+BUDDHIST_OFFSET = 543
+
+
+def parse_named_date(raw: str) -> datetime | None:
+    """
+    Read a date whose month is spelled out, in Thai or English.
+
+    Only named months are accepted. "03/09/2026" is deliberately refused:
+    the day/month order cannot be recovered from the string, and guessing
+    wrong moves a glucose reading six months.
+    """
+    text = raw.strip()
+
+    month = None
+    for name, number in THAI_MONTHS.items():
+        if name in text:
+            month = number
+            text = text.replace(name, " ")
+            break
+    if month is None:
+        lowered = text.lower()
+        for name, number in EN_MONTHS.items():
+            if name in lowered:
+                month = number
+                index = lowered.index(name)
+                # Cut the whole word, not just the three letters, so that
+                # "September" does not leave "tember" behind.
+                end = index
+                while end < len(text) and text[end].isalpha():
+                    end += 1
+                text = text[:index] + " " + text[end:]
+                break
+    if month is None:
+        return None
+
+    clock = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
+    hour = minute = second = 0
+    if clock:
+        hour, minute = int(clock.group(1)), int(clock.group(2))
+        second = int(clock.group(3) or 0)
+        text = text[:clock.start()] + " " + text[clock.end():]
+        meridiem = re.search(r"\b([AaPp])\.?[Mm]\.?", text)
+        if meridiem:
+            upper = meridiem.group(1).upper()
+            if upper == "P" and hour < 12:
+                hour += 12
+            elif upper == "A" and hour == 12:
+                hour = 0
+
+    numbers = [int(n) for n in re.findall(r"\d+", text)]
+    year = next((n for n in numbers if n >= 1000), None)
+    day = next((n for n in numbers if 1 <= n <= 31), None)
+    if year is None or day is None:
+        return None
+    if year > 2400:                       # Buddhist era
+        year -= BUDDHIST_OFFSET
+
+    try:
+        return datetime(year, month, day, hour, minute, second, tzinfo=TZ)
+    except ValueError:
+        return None
+
+
 def parse_since(raw: str) -> datetime:
     """Accept what a Shortcut is likely to send, not only strict ISO."""
     text = raw.strip().replace("Z", "+00:00")
@@ -201,8 +280,11 @@ def parse_since(raw: str) -> datetime:
         try:
             when = datetime.fromtimestamp(float(text), TZ)
         except ValueError:
-            raise BadRequest(400, "cannot read since=%r; use ISO 8601 or a unix "
-                                  "timestamp" % raw)
+            when = parse_named_date(raw)
+            if when is None:
+                raise BadRequest(400, "cannot read since=%r; use ISO 8601, a "
+                                      "unix timestamp, or a date with a named "
+                                      "month" % raw)
     # A naive timestamp means the caller's own clock, which is the wearer's.
     return when.replace(tzinfo=TZ) if when.tzinfo is None else when
 
