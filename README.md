@@ -139,17 +139,22 @@ array looks the same either way.
 
 ### Speed
 
-A CGM samples every three minutes, so one day is ~480 readings. The Shortcut
-spends four on-device actions per reading, and that loop — not the network and
-not this service — is what makes a big share slow.
+Two different things can make a share slow, and they have different fixes.
 
-`?every=15` returns one reading per 15 minutes instead, cutting the loop 5× and
-the JSON with it. The curve in Health looks the same. The generated Shortcut
-uses `every=15`; change the number in its URL, or drop the parameter to log
-every single reading.
+**The import loop.** The Shortcut spends four on-device actions per reading. A
+CGM samples every three minutes — ~480 readings a day — so a large catch-up
+import really does take minutes. Normally it does not matter: `?since=` means a
+routine share carries only the handful of readings taken since the last one.
+`?every=N` is there for the catch-up case, returning one reading per N minutes
+instead of all of them. It walks newest-first, so **the most recent reading is
+always kept**. Off by default — every reading the CGM recorded is kept.
 
-Thinning walks newest-first, so **the most recent reading is always kept** and
-each one kept is at least that far apart.
+**The Health lookup.** Action 1 asks Health for its newest Blood Glucose sample.
+Unbounded, that search grows with every import you have ever done, so the
+Shortcut gets slower over time *even when only one reading is new*. The
+generated Shortcut bounds it to the last 7 days (`--window`), which keeps the
+cursor lookup constant. If a share ever takes far longer than the number of new
+readings can explain, this is where to look — not the loop.
 
 ### Units
 
@@ -180,7 +185,7 @@ Errors: `400` unreadable request, `401` bad token, `413` oversized,
 
 1. Open the file on the iPhone and add the shortcut.
 2. Open its **Get Contents of URL** action and replace the URL with your own:
-   `https://your-project.vercel.app/api/convert?token=YOUR_TOKEN&unit=mg/dL&every=15&since=`
+   `https://your-project.vercel.app/api/convert?token=YOUR_TOKEN&unit=mg/dL&since=`
    Leave the date variable that already sits at the end of the field.
 3. Turn on *Show in Share Sheet*, accepting files.
 
@@ -189,13 +194,14 @@ On macOS you can generate a filled-in copy instead:
 ```bash
 python3 build_shortcut.py \
   --url https://your-project.vercel.app/api/convert \
-  --token YOUR_TOKEN --unit mg/dL --every 15 -o mine.shortcut
+  --token YOUR_TOKEN --unit mg/dL -o mine.shortcut
 shortcuts sign -m anyone -i mine.shortcut -o "iCan to Health.shortcut"
 ```
 
 Pass `--unit mmol/L` if that is what your Health app should record; the flag
 pins the URL parameter and the Log Health Sample picker together so they cannot
-disagree. `--every 0` keeps every reading.
+disagree. `--every N` thins a big catch-up import; `--window DAYS` sets how
+far back action 1 looks for its cursor.
 
 > **Never publish a filled-in shortcut.** The token is embedded in its URL, and
 > anyone holding it can spend your deployment's quota. There is no stored data
@@ -204,7 +210,7 @@ disagree. `--every 0` keeps every reading.
 
 ### What it does, in order
 
-1. **Find Health Samples** — Blood Glucose, newest first, limit 1 → the import cursor
+1. **Find Health Samples** — Blood Glucose in the last 7 days, newest first, limit 1 → the import cursor
 2. **Get Dates from Input** → that sample's timestamp
 3. **Get Contents of URL** — POST the shared `.xls`, with the cursor as `?since=`
 4. **Get Dictionary from Input**
@@ -215,8 +221,8 @@ disagree. `--every 0` keeps every reading.
 9. **Log Health Sample** — Blood Glucose, value ← 6, date ← 8
 10. **End Repeat**
 
-Before the first real run, check that action 1 shows **Sort by Start Date,
-Latest First, Limit 1**. Without that the cursor is wrong and readings import
+Before the first real run, check that action 1 shows **Start Date is in the
+last 7 days**, **Sort by Start Date, Latest First, Limit 1**. Without that the cursor is wrong and readings import
 repeatedly — and Health has no way to overwrite a sample, so duplicates have to
 be deleted by hand.
 
@@ -244,8 +250,7 @@ the full grid against `xlrd` on real files before trusting it.
   exporters will need adjusting.
 - Blood glucose only.
 - A full day is ~480 readings and `Repeat with Each` is slow in Shortcuts, so
-  the Shortcut asks for `every=15`. Raise the resolution only if you are ready
-  to wait — and import regularly rather than in one batch.
+  import regularly rather than in one batch. `?every=N` thins a catch-up.
 
 ## Licence
 

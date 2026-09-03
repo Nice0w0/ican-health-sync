@@ -62,7 +62,7 @@ def text_with(action_uuid, prefix="", suffix="", name="output"):
     }
 
 
-def build(url, token, unit="mg/dL", every=15):
+def build(url, token, unit="mg/dL", every=0, window=7):
     find_u, since_u, http_u, dict_u = u(), u(), u(), u()
     value_u, datetext_u, date_u = u(), u(), u()
     group = u()
@@ -77,6 +77,20 @@ def build(url, token, unit="mg/dL", every=15):
     # ~480 a day. At 15 minutes that is 96, and the curve still looks the same
     # in Health.
     thin = ("&every=%d" % every) if every else ""
+
+    # Bound the Health search to a recent window. Without this, action 1 scans
+    # every Blood Glucose sample Health has ever held, so the shortcut gets
+    # slower with each import even when only one reading is new -- which is the
+    # opposite of what the `since` cursor is for. The shape below (Operator
+    # 1001, Unit 16) is read off a Find Health Samples action built on device,
+    # not inferred.
+    date_bound = [{
+        "Bounded": True,
+        "Operator": 1001,                   # "is in the last ..."
+        "Property": "Start Date",
+        "Removable": False,
+        "Values": {"Number": str(window), "Unit": 16},
+    }] if window else []
     base = "%s?token=%s&unit=%s%s&since=" % (url, token, quote(unit), thin)
 
     actions = [
@@ -98,7 +112,7 @@ def build(url, token, unit="mg/dL", every=15):
                             "Values": {"Enumeration": {
                                 "Value": SAMPLE_TYPE,
                                 "WFSerializationType": "WFStringSubstitutableState"}},
-                        }],
+                        }] + date_bound,
                         "WFContentPredicateBoundedDate": False,
                     },
                     "WFSerializationType": "WFContentPredicateTableTemplate",
@@ -217,13 +231,17 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--unit", default="mg/dL", choices=["mg/dL", "mmol/L"],
                     help="must match the unit your Health app expects")
-    ap.add_argument("--every", type=int, default=15, metavar="MINUTES",
-                    help="thin readings to one per MINUTES; 0 keeps every "
-                         "reading, which makes a big share slow")
+    ap.add_argument("--every", type=int, default=0, metavar="MINUTES",
+                    help="thin readings to one per MINUTES; the default 0 "
+                         "keeps every reading the CGM recorded")
+    ap.add_argument("--window", type=int, default=7, metavar="DAYS",
+                    help="how far back action 1 looks for the import cursor; "
+                         "0 searches all of Health, which gets slower forever")
     ap.add_argument("-o", "--output", default="iCan to Health.shortcut")
     args = ap.parse_args()
     with open(args.output, "wb") as fh:
-        plistlib.dump(build(args.url, args.token, args.unit, args.every), fh,
+        plistlib.dump(build(args.url, args.token, args.unit, args.every,
+                            args.window), fh,
                       fmt=plistlib.FMT_BINARY)
     print("wrote %s" % args.output)
 
