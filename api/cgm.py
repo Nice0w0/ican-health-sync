@@ -155,7 +155,18 @@ def read_rows(blob: bytes) -> tuple[list[tuple[datetime, float]], str]:
     if not rows:
         raise BadRequest(422, "header found but no readings under it")
     rows.sort(key=lambda r: r[0])
-    return rows, unit
+
+    # Collapse repeated timestamps. HealthKit has no upsert -- Log Health
+    # Sample only ever appends -- so a row that appears twice in the export
+    # becomes two samples in Health at the same minute, and no later run can
+    # remove them. Dropping them here is the only place it can be done.
+    deduped = []
+    for row in rows:
+        if deduped and deduped[-1][0] == row[0]:
+            deduped[-1] = row      # same minute: the later row wins
+        else:
+            deduped.append(row)
+    return deduped, unit
 
 
 def thin(rows: list[tuple[datetime, float]], minutes: int) -> list[tuple[datetime, float]]:
