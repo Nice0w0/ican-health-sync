@@ -101,8 +101,14 @@ def extract_upload(body: bytes, content_type: str) -> bytes:
     raise BadRequest(400, "multipart request carried no file")
 
 
-def parse_export(blob: bytes) -> tuple[list[dict], str]:
-    """Return (readings oldest-first, unit)."""
+def read_rows(blob: bytes) -> tuple[list[tuple[datetime, float]], str]:
+    """
+    Return (rows oldest-first, unit declared by the export).
+
+    Deliberately does no formatting and no unit conversion: most of a share is
+    usually readings Health already has, and there is no point shaping rows
+    that are about to be filtered away.
+    """
     with NamedTemporaryFile(suffix=".xls") as fh:
         fh.write(blob)
         fh.flush()
@@ -127,7 +133,7 @@ def parse_export(blob: bytes) -> tuple[list[dict], str]:
         raise BadRequest(422, "value column header %r does not declare a unit" % head)
     unit = canonical_unit(head[head.index("(") + 1:head.rindex(")")])
 
-    readings = []
+    rows = []
     for i in range(header_row + 1, len(grid)):
         row = grid[i]
         if len(row) < 3:
@@ -145,18 +151,34 @@ def parse_export(blob: bytes) -> tuple[list[dict], str]:
             value = float(raw_value)
         except ValueError:
             raise BadRequest(422, "row %d: value %r is not a number" % (i + 1, raw_value))
-        readings.append({
-            "date_iso": when.isoformat(timespec="seconds"),
-            # This exact shape is what Shortcuts' date detector parses, and it
-            # works on a non-English device -- do not localise it.
-            "date_text": when.strftime("%b %d, %Y at %I:%M %p"),
-            "value": value,          # in the file's own unit; converted below
-            "unit": unit,
-        })
-    if not readings:
+        rows.append((when, value))
+    if not rows:
         raise BadRequest(422, "header found but no readings under it")
-    readings.sort(key=lambda r: r["date_iso"])
-    return readings, unit
+    rows.sort(key=lambda r: r[0])
+    return rows, unit
+
+
+def thin(rows: list[tuple[datetime, float]], minutes: int) -> list[tuple[datetime, float]]:
+    """
+    Drop readings closer together than `minutes`, newest kept first.
+
+    A CGM samples every three minutes, so a day is ~480 readings and the
+    Shortcut's `Repeat with Each` is what makes a big share slow -- four
+    actions per reading, on-device. Thinning is the only lever that shortens
+    that loop without losing the shape of the curve.
+
+    Walking newest-to-oldest matters: it guarantees the most recent reading is
+    always kept. Doing it oldest-first would sometimes drop the newest one,
+    which reads as "it didn't sync the latest".
+    """
+    gap = timedelta(minutes=minutes)
+    kept, last = [], None
+    for when, value in reversed(rows):
+        if last is None or last - when >= gap:
+            kept.append((when, value))
+            last = when
+    kept.reverse()
+    return kept
 
 
 def parse_since(raw: str) -> datetime:
@@ -182,8 +204,27 @@ def authorise(supplied: str) -> None:
         raise BadRequest(401, "bad token")
 
 
-def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], int, str, str]:
-    """Return (readings, total_before_filtering, output_unit, source_unit)."""
+def positive_int(query: dict, key: str) -> int | None:
+    raw = query.get(key)
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise BadRequest(400, "%s must be a whole number, got %r" % (key, raw))
+    if value < 1:
+        raise BadRequest(400, "%s must be at least 1" % key)
+    return value
+
+
+def convert(body: bytes, content_type: str, query: dict):
+    """
+    Return (readings, total_before_filtering, output_unit, source_unit, cutoff).
+
+    The order here is the whole point: filter, thin, cap, and only then shape.
+    Everything the Shortcut will not log is dropped before any timestamp is
+    formatted or any value converted.
+    """
     authorise(query.get("token", ""))
 
     blob = extract_upload(body, content_type)
@@ -192,28 +233,43 @@ def convert(body: bytes, content_type: str, query: dict) -> tuple[list[dict], in
     if len(blob) > MAX_BYTES:
         raise BadRequest(413, "file too large")
 
-    readings, source_unit = parse_export(blob)
-    total = len(readings)
+    rows, source_unit = read_rows(blob)
+    total = len(rows)
+
+    # Apple Health is the cursor: the Shortcut sends its newest Blood Glucose
+    # sample, so nearly every share collapses to a handful of rows here.
+    cutoff = parse_since(query["since"]) if query.get("since") else None
+    if cutoff:
+        rows = [r for r in rows if r[0] > cutoff]
+
+    every = positive_int(query, "every")
+    if every:
+        rows = thin(rows, every)
+
+    limit = positive_int(query, "limit")
+    if limit:
+        rows = rows[-limit:]
 
     # Default to mg/dL because that is what the published Shortcut's Log Health
     # Sample action is set to. Anyone whose Shortcut uses mmol/L passes
     # ?unit=mmol/L; the two must agree or Health records a wrong number.
     out_unit = canonical_unit(query.get("unit") or DEFAULT_UNIT)
-    for r in readings:
-        r["value"] = convert_value(r["value"], source_unit, out_unit)
-        r["unit"] = out_unit
 
-    since = query.get("since")
-    if since:
-        cutoff = parse_since(since)
-        readings = [r for r in readings
-                    if datetime.fromisoformat(r["date_iso"]) > cutoff]
+    # The Shortcut reads exactly two keys, and every extra byte is JSON the
+    # phone has to parse before the loop can start. `verbose=1` restores the
+    # full shape for anything else that wants it.
+    verbose = str(query.get("verbose", "")).lower() in ("1", "true", "yes")
+    readings = []
+    for when, value in rows:
+        reading = {
+            "value": convert_value(value, source_unit, out_unit),
+            # This exact shape is what Shortcuts' date detector parses, and it
+            # works on a non-English device -- do not localise it.
+            "date_text": when.strftime("%b %d, %Y at %I:%M %p"),
+        }
+        if verbose:
+            reading["date_iso"] = when.isoformat(timespec="seconds")
+            reading["unit"] = out_unit
+        readings.append(reading)
 
-    limit = query.get("limit")
-    if limit:
-        try:
-            readings = readings[-int(limit):]
-        except ValueError:
-            raise BadRequest(400, "limit must be a number")
-
-    return readings, total, out_unit, source_unit
+    return readings, total, out_unit, source_unit, cutoff

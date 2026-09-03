@@ -112,25 +112,44 @@ request body.
 | Query | Meaning |
 |---|---|
 | `since` | ISO 8601 or a unix timestamp. Returns only readings **strictly newer**. A value without a timezone is read in `CGM_TZ_OFFSET`. |
+| `every` | Thin to at most one reading per this many minutes. See [Speed](#speed). |
 | `unit` | `mg/dL` (default) or `mmol/L`. Values are converted from whatever the export declares. |
 | `limit` | At most this many readings, newest first. Useful for a first run. |
+| `verbose` | `1` also returns `date_iso` and `unit` per reading. Off by default — the Shortcut does not read them and it doubles the payload. |
 | `token` | Alternative to the `X-Token` header, for clients that cannot set headers easily. |
 
-Returns a JSON array, oldest first:
+Returns a JSON array, oldest first — only what the Shortcut logs:
 
 ```json
-[{"date_iso":  "2026-09-01T19:46:00+07:00",
-  "date_text": "Sep 01, 2026 at 07:46 PM",
-  "value":     72,
-  "unit":      "mg/dL"}]
+[{"value": 72, "date_text": "Sep 01, 2026 at 07:46 PM"}]
 ```
 
 `date_text` exists because Shortcuts' date detector parses that exact shape
 reliably — including on a non-English device. Feed *that* to **Get Dates from
-Input**, not `date_iso`.
+Input**.
 
-Response headers `X-Readings-Total`, `X-Readings-Returned`, `X-Unit` and
-`X-Source-Unit` let a client report what happened without walking the array.
+Filtering happens before formatting: rows Health already has are dropped before
+any timestamp is rendered or any value converted.
+
+Response headers `X-Readings-Total`, `X-Readings-Returned`, `X-Unit`,
+`X-Source-Unit` and `X-Since` let a client report what happened without walking
+the array. `X-Since` echoes the cursor the server actually parsed, which is the
+quick way to tell *"nothing new"* from *"the cursor never arrived"* — an empty
+array looks the same either way.
+
+### Speed
+
+A CGM samples every three minutes, so one day is ~480 readings. The Shortcut
+spends four on-device actions per reading, and that loop — not the network and
+not this service — is what makes a big share slow.
+
+`?every=15` returns one reading per 15 minutes instead, cutting the loop 5× and
+the JSON with it. The curve in Health looks the same. The generated Shortcut
+uses `every=15`; change the number in its URL, or drop the parameter to log
+every single reading.
+
+Thinning walks newest-first, so **the most recent reading is always kept** and
+each one kept is at least that far apart.
 
 ### Units
 
@@ -161,7 +180,7 @@ Errors: `400` unreadable request, `401` bad token, `413` oversized,
 
 1. Open the file on the iPhone and add the shortcut.
 2. Open its **Get Contents of URL** action and replace the URL with your own:
-   `https://your-project.vercel.app/api/convert?token=YOUR_TOKEN&unit=mg/dL&since=`
+   `https://your-project.vercel.app/api/convert?token=YOUR_TOKEN&unit=mg/dL&every=15&since=`
    Leave the date variable that already sits at the end of the field.
 3. Turn on *Show in Share Sheet*, accepting files.
 
@@ -170,13 +189,13 @@ On macOS you can generate a filled-in copy instead:
 ```bash
 python3 build_shortcut.py \
   --url https://your-project.vercel.app/api/convert \
-  --token YOUR_TOKEN --unit mg/dL -o mine.shortcut
+  --token YOUR_TOKEN --unit mg/dL --every 15 -o mine.shortcut
 shortcuts sign -m anyone -i mine.shortcut -o "iCan to Health.shortcut"
 ```
 
 Pass `--unit mmol/L` if that is what your Health app should record; the flag
 pins the URL parameter and the Log Health Sample picker together so they cannot
-disagree.
+disagree. `--every 0` keeps every reading.
 
 > **Never publish a filled-in shortcut.** The token is embedded in its URL, and
 > anyone holding it can spend your deployment's quota. There is no stored data
@@ -224,8 +243,9 @@ the full grid against `xlrd` on real files before trusting it.
   whose first cell is `เลขที่` and parses times as `%H:%M,%m/%d/%Y`. Other
   exporters will need adjusting.
 - Blood glucose only.
-- A full day is ~480 readings; a `Repeat with Each` that long is slow in
-  Shortcuts. Import regularly rather than in one batch.
+- A full day is ~480 readings and `Repeat with Each` is slow in Shortcuts, so
+  the Shortcut asks for `every=15`. Raise the resolution only if you are ready
+  to wait — and import regularly rather than in one batch.
 
 ## Licence
 

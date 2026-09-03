@@ -2,7 +2,7 @@
 """
 Build the one-tap share-sheet shortcut that talks to the conversion API.
 
-Nine actions, all Apple's own -- no a-Shell, so nothing interrupts the run and
+Ten actions, all Apple's own -- no a-Shell, so nothing interrupts the run and
 a share really is one tap. `Execute Command` could never be used here: it opens
 a-Shell and Shortcuts never resumes afterwards.
 
@@ -62,7 +62,7 @@ def text_with(action_uuid, prefix="", suffix="", name="output"):
     }
 
 
-def build(url, token, unit="mg/dL"):
+def build(url, token, unit="mg/dL", every=15):
     find_u, since_u, http_u, dict_u = u(), u(), u(), u()
     value_u, datetext_u, date_u = u(), u(), u()
     group = u()
@@ -71,7 +71,13 @@ def build(url, token, unit="mg/dL"):
     # export declares into `unit`, and Log Health Sample below is set to the
     # same one. They cannot drift apart, because Shortcuts' unit picker cannot
     # take a variable and a mismatch would record a dangerously wrong number.
-    base = "%s?token=%s&unit=%s&since=" % (url, token, quote(unit))
+    # `every` thins the readings server-side. It is the one setting that
+    # decides how long a run takes: the loop below costs four on-device actions
+    # per reading, and a raw CGM feed is one reading every three minutes --
+    # ~480 a day. At 15 minutes that is 96, and the curve still looks the same
+    # in Health.
+    thin = ("&every=%d" % every) if every else ""
+    base = "%s?token=%s&unit=%s%s&since=" % (url, token, quote(unit), thin)
 
     actions = [
         {
@@ -211,10 +217,13 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--unit", default="mg/dL", choices=["mg/dL", "mmol/L"],
                     help="must match the unit your Health app expects")
+    ap.add_argument("--every", type=int, default=15, metavar="MINUTES",
+                    help="thin readings to one per MINUTES; 0 keeps every "
+                         "reading, which makes a big share slow")
     ap.add_argument("-o", "--output", default="iCan to Health.shortcut")
     args = ap.parse_args()
     with open(args.output, "wb") as fh:
-        plistlib.dump(build(args.url, args.token, args.unit), fh,
+        plistlib.dump(build(args.url, args.token, args.unit, args.every), fh,
                       fmt=plistlib.FMT_BINARY)
     print("wrote %s" % args.output)
 

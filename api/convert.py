@@ -41,7 +41,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
-            readings, total, unit, source_unit = convert(
+            readings, total, unit, source_unit, cutoff = convert(
                 body, self.headers.get("Content-Type", ""), query)
         except BadRequest as exc:
             return self._send(exc.status, {"error": exc.message})
@@ -53,4 +53,7 @@ class handler(BaseHTTPRequestHandler):
             "X-Readings-Returned": str(len(readings)),
             "X-Unit": unit,
             "X-Source-Unit": source_unit,
+            # Echoed so a caller can tell "nothing new" from "the cursor never
+            # arrived" -- the two look identical from an empty array.
+            "X-Since": cutoff.isoformat(timespec="seconds") if cutoff else "none",
         })
