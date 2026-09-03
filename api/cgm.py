@@ -274,6 +274,11 @@ def parse_named_date(raw: str) -> datetime | None:
 def parse_since(raw: str) -> datetime:
     """Accept what a Shortcut is likely to send, not only strict ISO."""
     text = raw.strip().replace("Z", "+00:00")
+    # "+" means space in a query string, so a positive UTC offset arrives as
+    # "2026-09-04T00:37:00 07:00". Nothing else in an ISO timestamp looks like
+    # this, so putting the sign back is unambiguous -- and the alternative is a
+    # 400 for every wearer east of Greenwich.
+    text = re.sub(r"(T\d{2}:\d{2}(?::\d{2})?)\s+(\d{2}:?\d{2})$", r"\1+\2", text)
     try:
         when = datetime.fromisoformat(text)
     except ValueError:
