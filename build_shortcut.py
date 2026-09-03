@@ -35,10 +35,24 @@ def u():
     return str(uuid.uuid4()).upper()
 
 
-def out(action_uuid, name="output"):
-    return {"Value": {"OutputName": name, "OutputUUID": action_uuid,
-                      "Type": "ActionOutput"},
-            "WFSerializationType": "WFTextTokenAttachment"}
+def out(action_uuid, name="output", prop=None):
+    """
+    A reference to an earlier action's output.
+
+    `prop` reads one property off that output instead of the whole thing --
+    what the app does when you tap a variable token and pick a detail from the
+    list underneath it. A Health Sample rendered as text is just its value, so
+    without this the date is silently absent: the cursor arrives empty, the
+    server sees no `since`, and every share re-imports the entire export.
+    """
+    value = {"OutputName": name, "OutputUUID": action_uuid,
+             "Type": "ActionOutput"}
+    if prop:
+        value["Aggrandizements"] = [{
+            "Type": "WFPropertyVariableAggrandizement",
+            "PropertyName": prop,
+        }]
+    return {"Value": value, "WFSerializationType": "WFTextTokenAttachment"}
 
 
 def var(name):
@@ -128,11 +142,11 @@ def build(url, token, unit="mg/dL", every=0, window=7):
             },
         },
         {
-            # Turn that sample into a Date the URL can carry.
+            # Turn that sample's *Start Date* into a Date the URL can carry.
             "WFWorkflowActionIdentifier": DETECT_DATE,
             "WFWorkflowActionParameters": {
                 "UUID": since_u,
-                "WFInput": out(find_u, "Health Samples"),
+                "WFInput": out(find_u, "Health Samples", prop="Start Date"),
             },
         },
         {
