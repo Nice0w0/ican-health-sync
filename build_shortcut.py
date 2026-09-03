@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 FIND_HEALTH = "is.workflow.actions.filter.health.quantity"
 DETECT_DATE = "is.workflow.actions.detect.date"
+FORMAT_DATE = "is.workflow.actions.format.date"
 GET_URL = "is.workflow.actions.downloadurl"
 DETECT_DICT = "is.workflow.actions.detect.dictionary"
 REPEAT_EACH = "is.workflow.actions.repeat.each"
@@ -77,7 +78,7 @@ def text_with(action_uuid, prefix="", suffix="", name="output"):
 
 
 def build(url, token, unit="mg/dL", every=0, window=7):
-    find_u, since_u, http_u, dict_u = u(), u(), u(), u()
+    find_u, since_u, iso_u, http_u, dict_u = u(), u(), u(), u(), u()
     value_u, datetext_u, date_u = u(), u(), u()
     group = u()
 
@@ -150,13 +151,30 @@ def build(url, token, unit="mg/dL", every=0, window=7):
             },
         },
         {
+            # Spell the cursor as ISO 8601 before it goes anywhere near a URL.
+            # Shortcuts renders a Date using the phone's locale and does not
+            # escape what it inserts, so a Thai phone produced
+            # "3 ก.ย. 2569 21:58" and the space ended the HTTP request line --
+            # the server received since=3, read it as a unix timestamp, and
+            # cheerfully returned the entire export. Every time.
+            # ISO 8601 has no spaces and is always Gregorian, so neither the
+            # locale nor the calendar can break it. No input key: an action
+            # without one takes the previous action's output.
+            "WFWorkflowActionIdentifier": FORMAT_DATE,
+            "WFWorkflowActionParameters": {
+                "UUID": iso_u,
+                "WFDateFormatStyle": "ISO 8601",
+                "WFISO8601IncludeTime": True,
+            },
+        },
+        {
             # The shared .xls goes up as the raw body; the API accepts that or
             # multipart. Token and cursor ride in the query string so no header
             # dictionary has to be configured.
             "WFWorkflowActionIdentifier": GET_URL,
             "WFWorkflowActionParameters": {
                 "UUID": http_u,
-                "WFURL": text_with(since_u, prefix=base, name="Date"),
+                "WFURL": text_with(iso_u, prefix=base, name="Formatted Date"),
                 "WFHTTPMethod": "POST",
                 "WFHTTPBodyType": "File",
                 "WFRequestVariable": {

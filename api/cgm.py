@@ -285,6 +285,17 @@ def parse_since(raw: str) -> datetime:
                 raise BadRequest(400, "cannot read since=%r; use ISO 8601, a "
                                       "unix timestamp, or a date with a named "
                                       "month" % raw)
+    if when.year > 2400:
+        # A Buddhist-era year that survived ISO parsing, e.g. "2569-09-03".
+        when = when.replace(year=when.year - BUDDHIST_OFFSET)
+    if when.year < 2000:
+        # Nothing legitimate points here. What does is a cursor that arrived
+        # mangled -- "since=3" read as a unix timestamp lands in 1970, and the
+        # damage is silent: no error, the whole export comes back, and Health
+        # gains another full copy. Refusing is the only safe answer.
+        raise BadRequest(400, "since=%r resolves to %s, which cannot be a real "
+                              "reading; the cursor arrived corrupted"
+                              % (raw, when.date()))
     # A naive timestamp means the caller's own clock, which is the wearer's.
     return when.replace(tzinfo=TZ) if when.tzinfo is None else when
 
