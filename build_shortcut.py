@@ -158,11 +158,17 @@ def build(url, token, unit="mg/dL", every=0, window=7):
             # the server received since=3, read it as a unix timestamp, and
             # cheerfully returned the entire export. Every time.
             # ISO 8601 has no spaces and is always Gregorian, so neither the
-            # locale nor the calendar can break it. No input key: an action
-            # without one takes the previous action's output.
+            # locale nor the calendar can break it.
+            #
+            # WFDate must be set explicitly. This action does NOT chain from the
+            # previous one the way Log Health Sample does -- leaving it out
+            # produced an empty result and, once again, an empty cursor. The key
+            # name and its WFTextTokenString shape are read off the user's
+            # device after wiring it by hand; both were guessed wrong first.
             "WFWorkflowActionIdentifier": FORMAT_DATE,
             "WFWorkflowActionParameters": {
                 "UUID": iso_u,
+                "WFDate": text_with(since_u, name="Date"),
                 "WFDateFormatStyle": "ISO 8601",
                 "WFISO8601IncludeTime": True,
             },
